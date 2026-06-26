@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const technicianApplicationSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
   name: {
     type: String,
     required: [true, 'Name is required'],
@@ -15,7 +20,7 @@ const technicianApplicationSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: [true, 'Password is required'],
+    required: false,  // ✅ Changed to false - optional
     minlength: 6
   },
   phone: {
@@ -62,8 +67,4 @@ const technicianApplicationSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// ⚠️ NO PRE-SAVE HOOK - Password is hashed in the controller
-
-const TechnicianApplication = mongoose.model('TechnicianApplication', technicianApplicationSchema);
-
-module.exports = TechnicianApplication;
+module.exports = mongoose.model('TechnicianApplication', technicianApplicationSchema);

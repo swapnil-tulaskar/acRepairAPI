@@ -56,11 +56,11 @@ app.use((err, req, res, next) => {
   console.error("Global error:", err);
   
   // Handle Zod validation errors
-  if (err.name === "ZodError" || err.issues) {
+  if (err.name === "ZodError" || err.issues || err.errors) {
     // Get the errors array
-    let errorList = err.errors;
+    let errorList = err.errors || err.issues || [];
     
-    // If errors is a string, parse it
+    // If errors is a string, it's already been stringified - parse it
     if (typeof errorList === 'string') {
       try {
         errorList = JSON.parse(errorList);
@@ -70,18 +70,38 @@ app.use((err, req, res, next) => {
       }
     }
     
-    // Format the errors
-    const errors = Array.isArray(errorList) 
-      ? errorList.map((e) => ({
-          field: e.path ? e.path.join(".") : "unknown",
-          message: e.message || "Validation error"
-        }))
-      : [{ message: "Validation error" }];
+    // Check if errorList is an array of objects or a string
+    let formattedErrors = [];
     
-    return res.status(400).json({
+    if (Array.isArray(errorList)) {
+      formattedErrors = errorList.map((e) => {
+        // If e is a string, treat it as a message
+        if (typeof e === 'string') {
+          return { message: e };
+        }
+        
+        // If e is an object with path and message
+        return {
+          field: e.path ? (Array.isArray(e.path) ? e.path.join(".") : e.path) : "unknown",
+          message: e.message || "Validation error",
+          code: e.code || "invalid"
+        };
+      });
+    } else if (typeof errorList === 'object' && errorList !== null) {
+      // If it's a single error object
+      formattedErrors = [{
+        field: errorList.path ? (Array.isArray(errorList.path) ? errorList.path.join(".") : errorList.path) : "unknown",
+        message: errorList.message || "Validation error",
+        code: errorList.code || "invalid"
+      }];
+    } else {
+      formattedErrors = [{ message: "Validation error" }];
+    }
+    
+    return res.status(422).json({
       success: false,
       message: "Validation error",
-      errors: errors
+      errors: formattedErrors
     });
   }
   

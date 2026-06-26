@@ -28,8 +28,15 @@ const protect = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    logger.debug(`DECODED USER: ${decoded.id} with role: ${decoded.role}`);
-    req.user = decoded;
+    logger.debug(`DECODED USER: ${decoded.id} with role: ${decoded.role}, email: ${decoded.email}`);
+    
+    // ✅ Make sure email is included in req.user
+    req.user = {
+      id: decoded.id,
+      role: decoded.role,
+      email: decoded.email || null
+    };
+    
     console.log("✅ protect middleware complete, calling next()");
     next();
   } catch (err) {

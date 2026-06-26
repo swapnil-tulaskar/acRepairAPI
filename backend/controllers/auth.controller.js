@@ -5,7 +5,7 @@ const jwt = require("jsonwebtoken");
 const { registerSchema, loginSchema, registerTechnicianSchema } = require("../validators/auth.validator.js");
 const { ZodError } = require("zod");
 
-// ==================== USER REGISTRATION (No Approval) =================
+// ==================== USER REGISTRATION =================
 const register = async (req, res) => {
   try {
     const validatedData = registerSchema.parse(req.body);
@@ -18,24 +18,22 @@ const register = async (req, res) => {
     });
 
     if (existingUser) {
-      console.log("❌ User already exists:", email);
-
       if (existingUser.email === email && existingUser.phone === phone) {
         return res.status(409).json({
           success: false,
-          message: "This email and phone number are already registered. Please login or use different credentials.",
+          message: "This email and phone number are already registered.",
           field: "both"
         });
       } else if (existingUser.email === email) {
         return res.status(409).json({
           success: false,
-          message: "This email is already registered. Please login or use a different email.",
+          message: "This email is already registered.",
           field: "email"
         });
       } else if (existingUser.phone === phone) {
         return res.status(409).json({
           success: false,
-          message: "This phone number is already registered. Please login or use a different phone number.",
+          message: "This phone number is already registered.",
           field: "phone"
         });
       }
@@ -55,7 +53,11 @@ const register = async (req, res) => {
     delete userResponse.password;
 
     const token = jwt.sign(
-      { id: user._id, role: user.role },
+      { 
+        id: user._id, 
+        role: user.role,
+        email: user.email
+      },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -85,24 +87,10 @@ const register = async (req, res) => {
 
     if (err.code === 11000) {
       const field = Object.keys(err.keyPattern)[0];
-      const value = err.keyValue[field];
-
-      let message = `${field} already exists`;
-      let fieldName = field;
-
-      if (field === "email") {
-        message = `Email "${value}" is already registered. Please login or use a different email.`;
-        fieldName = "email";
-      } else if (field === "phone") {
-        message = `Phone number "${value}" is already registered. Please login or use a different phone number.`;
-        fieldName = "phone";
-      }
-
       return res.status(409).json({
         success: false,
-        message,
-        field: fieldName,
-        value
+        message: `${field} already exists`,
+        field
       });
     }
 
@@ -114,19 +102,17 @@ const register = async (req, res) => {
   }
 };
 
-// ==================== TECHNICIAN REGISTRATION (Requires Approval) =================
+// ==================== TECHNICIAN APPLICATION =================
 const registerTechnician = async (req, res) => {
   console.log("📝 registerTechnician called");
+  console.log("User ID:", req.user.id);
   console.log("Request body:", req.body);
 
   try {
-    // Use the schema for validation
     const validatedData = registerTechnicianSchema.parse(req.body);
+    console.log("✅ Validation passed:", validatedData);
+
     const {
-      name,
-      email,
-      password,
-      phone,
       specialization,
       experience,
       certifications,
@@ -135,73 +121,83 @@ const registerTechnician = async (req, res) => {
       about
     } = validatedData;
 
-    console.log("Checking if user exists...");
-    const existingUser = await User.findOne({
-      $or: [{ email }, { phone }]
-    });
-
-    if (existingUser) {
-      console.log("❌ User already exists");
-
-      let message = "User already exists";
-      let field = "both";
-
-      if (existingUser.email === email && existingUser.phone === phone) {
-        message = "This email and phone number are already registered. Please login or use different credentials.";
-        field = "both";
-      } else if (existingUser.email === email) {
-        message = "This email is already registered. Please login or use a different email.";
-        field = "email";
-      } else if (existingUser.phone === phone) {
-        message = "This phone number is already registered. Please login or use a different phone number.";
-        field = "phone";
-      }
-
-      return res.status(409).json({
+    const user = await User.findById(req.user.id).select("+password");
+    if (!user) {
+      console.log("❌ User not found:", req.user.id);
+      return res.status(404).json({
         success: false,
-        message,
-        field
+        message: "User not found"
       });
     }
 
-    console.log("Checking for pending application...");
+    console.log("✅ User found:", user.email);
+    console.log("User has password:", !!user.password);
+
+    let userPassword = user.password;
+    if (!userPassword) {
+      console.log("⚠️ User password is missing, generating temp password");
+      userPassword = await bcrypt.hash("temporary123", 10);
+    }
+
     const existingApplication = await TechnicianApplication.findOne({
-      email,
-      status: "pending"
+      email: user.email
     });
 
     if (existingApplication) {
-      console.log("❌ Pending application exists");
-      return res.status(409).json({
-        success: false,
-        message: "You already have a pending application. Please wait for admin approval."
-      });
+      console.log("Existing application found:", existingApplication.status);
+
+      if (existingApplication.status === "pending") {
+        return res.status(409).json({
+          success: false,
+          message: "You already have a pending application. Please wait for admin approval.",
+          status: "pending"
+        });
+      }
+
+      if (existingApplication.status === "approved") {
+        return res.status(409).json({
+          success: false,
+          message: "You are already an approved technician.",
+          status: "approved"
+        });
+      }
+
+      if (existingApplication.status === "rejected") {
+        existingApplication.specialization = specialization;
+        existingApplication.experience = experience || "";
+        existingApplication.certifications = certifications || "";
+        existingApplication.address = address || "";
+        existingApplication.availability = availability || "available";
+        existingApplication.about = about || "";
+        existingApplication.status = "pending";
+        existingApplication.reviewedBy = null;
+        existingApplication.reviewedAt = null;
+        existingApplication.reviewNotes = null;
+        await existingApplication.save();
+
+        console.log("✅ Application resubmitted successfully");
+
+        return res.status(200).json({
+          success: true,
+          message: "Application resubmitted successfully. Please wait for admin approval.",
+          data: {
+            id: existingApplication._id,
+            name: existingApplication.name,
+            email: existingApplication.email,
+            status: existingApplication.status,
+            submittedAt: existingApplication.createdAt
+          }
+        });
+      }
     }
 
-    console.log("Checking for rejected application...");
-    const rejectedApplication = await TechnicianApplication.findOne({
-      email,
-      status: "rejected"
-    });
-
-    if (rejectedApplication) {
-      console.log("❌ Previously rejected application");
-      return res.status(403).json({
-        success: false,
-        message: "Your previous application was rejected. Please contact admin for more information."
-      });
-    }
-
-    console.log("Hashing password...");
-    const hashedPassword = await bcrypt.hash(password, 10);
-    console.log("✅ Password hashed successfully");
-
-    console.log("Creating technician application...");
-    const application = await TechnicianApplication.create({
-      name,
-      email,
-      password: hashedPassword,
-      phone,
+    console.log("Creating new application...");
+    const applicationData = {
+      userId: user._id,
+      name: user.name,
+      email: user.email,
+      password: userPassword,
+      phone: user.phone,
       specialization,
       experience: experience || "",
       certifications: certifications || "",
@@ -209,10 +205,16 @@ const registerTechnician = async (req, res) => {
       availability: availability || "available",
       about: about || "",
       status: "pending"
+    };
+
+    console.log("Application data:", {
+      ...applicationData,
+      password: applicationData.password ? "HASHED_PASSWORD_SET" : "NO_PASSWORD"
     });
 
-    console.log("✅ Technician application created successfully");
-    console.log("Application ID:", application._id);
+    const application = await TechnicianApplication.create(applicationData);
+
+    console.log("✅ Technician application created successfully, ID:", application._id);
 
     return res.status(201).json({
       success: true,
@@ -221,14 +223,12 @@ const registerTechnician = async (req, res) => {
         id: application._id,
         name: application.name,
         email: application.email,
-        phone: application.phone,
         status: application.status,
         submittedAt: application.createdAt
       }
     });
 
   } catch (err) {
-    // Handle Zod validation errors
     if (err instanceof ZodError) {
       console.log("❌ Validation error:", err.errors);
       const errors = err.errors.map((e) => ({
@@ -243,27 +243,26 @@ const registerTechnician = async (req, res) => {
       });
     }
 
-    // Handle duplicate key errors
+    if (err.name === "ValidationError") {
+      console.log("❌ Mongoose Validation Error:", err.errors);
+      const errors = Object.keys(err.errors).map((key) => ({
+        field: key,
+        message: err.errors[key].message
+      }));
+
+      return res.status(422).json({
+        success: false,
+        message: "Validation error",
+        errors
+      });
+    }
+
     if (err.code === 11000) {
       const field = Object.keys(err.keyPattern)[0];
-      const value = err.keyValue[field];
-
-      let message = `${field} already exists`;
-      let fieldName = field;
-
-      if (field === "email") {
-        message = `Email "${value}" is already registered. Please use a different email.`;
-        fieldName = "email";
-      } else if (field === "phone") {
-        message = `Phone number "${value}" is already registered. Please use a different phone number.`;
-        fieldName = "phone";
-      }
-
       return res.status(409).json({
         success: false,
-        message,
-        field: fieldName,
-        value
+        message: `${field} already exists`,
+        field
       });
     }
 
@@ -277,7 +276,7 @@ const registerTechnician = async (req, res) => {
   }
 };
 
-// ==================== LOGIN (For All Users) =================
+// ==================== LOGIN =================
 const login = async (req, res) => {
   try {
     const validatedData = loginSchema.parse(req.body);
@@ -285,74 +284,54 @@ const login = async (req, res) => {
 
     console.log("📝 Login attempt:", email);
 
-    let user = await User.findOne({ email }).select("+password");
-    let isNewTechnician = false;
+    const user = await User.findOne({ email }).select("+password");
 
     if (!user) {
-      console.log("User not found, checking technician applications...");
-      const application = await TechnicianApplication.findOne({
-        email,
-        status: "approved"
-      });
-
-      if (application) {
-        console.log("Found approved application, creating user from approved technician application...");
-
-        // Check if user already exists (double-check)
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-          user = existingUser;
-        } else {
-          // Use the already hashed password from the application
-          user = await User.create({
-            name: application.name,
-            email: application.email,
-            password: application.password, // Already hashed
-            phone: application.phone,
-            role: "technician",
-            specialization: application.specialization,
-            isActive: true,
-            assignedJobs: []
-          });
-          isNewTechnician = true;
-          console.log("✅ Technician user created from application");
-        }
-      } else {
-        console.log("❌ No user or approved application found");
-        return res.status(401).json({
-          success: false,
-          message: "Invalid email or password"
-        });
-      }
-    }
-
-    // Check if user account is active
-    if (!user.isActive) {
-      console.log("❌ User is deactivated");
-      return res.status(403).json({
-        success: false,
-        message: "Account is deactivated. Please contact admin."
-      });
-    }
-
-    // Verify password
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      console.log("❌ Invalid password");
       return res.status(401).json({
         success: false,
         message: "Invalid email or password"
       });
     }
 
-    // Generate JWT token
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Account is deactivated. Please contact admin."
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password"
+      });
+    }
+
+    let applicationStatus = null;
+    let rejectionReason = null;
+
+    const application = await TechnicianApplication.findOne({
+      email: user.email
+    });
+
+    if (application) {
+      applicationStatus = application.status;
+      if (application.status === "rejected") {
+        rejectionReason = application.reviewNotes || "Application rejected";
+      }
+    }
+
     const token = jwt.sign(
-      { id: user._id, role: user.role },
+      { 
+        id: user._id, 
+        role: user.role,
+        email: user.email
+      },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    // Prepare response (remove password)
     const userResponse = user.toObject();
     delete userResponse.password;
 
@@ -362,13 +341,12 @@ const login = async (req, res) => {
       success: true,
       token,
       user: userResponse,
-      message: isNewTechnician
-        ? "Login successful! Your technician account is now active."
-        : "Login successful"
+      technicianStatus: applicationStatus,
+      rejectionReason: rejectionReason,
+      message: "Login successful"
     });
 
   } catch (err) {
-    // Handle Zod validation errors
     if (err instanceof ZodError) {
       const errors = err.errors.map((e) => ({
         field: e.path.join("."),
@@ -385,8 +363,139 @@ const login = async (req, res) => {
     console.error("❌ Error in login:", err);
     return res.status(500).json({
       success: false,
-      message: "Internal server error",
-      error: process.env.NODE_ENV === "development" ? err.message : undefined
+      message: "Internal server error"
+    });
+  }
+};
+
+// ==================== GET TECHNICIAN STATUS =================
+const getTechnicianStatus = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const application = await TechnicianApplication.findOne({
+      email: user.email
+    });
+
+    if (!application) {
+      return res.json({
+        success: true,
+        hasApplied: false,
+        status: null,
+        message: "You have not applied to become a technician yet."
+      });
+    }
+
+    return res.json({
+      success: true,
+      hasApplied: true,
+      status: application.status,
+      rejectionReason: application.status === "rejected" ? application.reviewNotes : null,
+      submittedAt: application.createdAt,
+      reviewedAt: application.reviewedAt,
+      data: {
+        specialization: application.specialization,
+        experience: application.experience,
+        certifications: application.certifications,
+        address: application.address,
+        availability: application.availability,
+        about: application.about
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Error in getTechnicianStatus:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error"
+    });
+  }
+};
+
+// ==================== RESUBMIT TECHNICIAN APPLICATION =================
+const resubmitTechnicianApplication = async (req, res) => {
+  try {
+    const validatedData = registerTechnicianSchema.parse(req.body);
+    const {
+      specialization,
+      experience,
+      certifications,
+      address,
+      availability,
+      about
+    } = validatedData;
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const application = await TechnicianApplication.findOne({
+      email: user.email
+    });
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: "No application found."
+      });
+    }
+
+    if (application.status !== "rejected") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot resubmit application with status: ${application.status}`
+      });
+    }
+
+    application.specialization = specialization;
+    application.experience = experience || "";
+    application.certifications = certifications || "";
+    application.address = address || "";
+    application.availability = availability || "available";
+    application.about = about || "";
+    application.status = "pending";
+    application.reviewedBy = null;
+    application.reviewedAt = null;
+    application.reviewNotes = null;
+    await application.save();
+
+    return res.json({
+      success: true,
+      message: "Application resubmitted successfully. Please wait for admin approval.",
+      data: {
+        id: application._id,
+        status: application.status
+      }
+    });
+
+  } catch (err) {
+    if (err instanceof ZodError) {
+      const errors = err.errors.map((e) => ({
+        field: e.path.join("."),
+        message: e.message
+      }));
+
+      return res.status(422).json({
+        success: false,
+        message: "Validation error",
+        errors
+      });
+    }
+
+    console.error("❌ Error in resubmitTechnicianApplication:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error"
     });
   }
 };
@@ -394,5 +503,7 @@ const login = async (req, res) => {
 module.exports = {
   register,
   registerTechnician,
-  login
+  login,
+  getTechnicianStatus,
+  resubmitTechnicianApplication
 };

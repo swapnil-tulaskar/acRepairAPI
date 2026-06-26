@@ -10,7 +10,9 @@ const {
 
 const router = express.Router();
 
-router.use(protect, technicianOnly);
+// All routes require authentication and approved technician status
+router.use(protect);
+router.use(technicianOnly);
 
 router.get("/jobs", getMyAssignedJobs);
 router.get("/jobs/:id", getJobDetails);

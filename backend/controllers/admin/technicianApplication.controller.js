@@ -89,27 +89,30 @@ const approveApplication = async (req, res) => {
       });
     }
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email: application.email });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: "User with this email already exists"
+    // Find the user by email
+    let user = await User.findOne({ email: application.email });
+
+    if (!user) {
+      // Create user if doesn't exist (backward compatibility)
+      user = await User.create({
+        name: application.name,
+        email: application.email,
+        password: application.password, // Already hashed
+        phone: application.phone,
+        role: "technician",
+        specialization: application.specialization,
+        isActive: true
       });
+    } else {
+      // Update existing user to technician
+      user.role = "technician";
+      user.specialization = application.specialization;
+      user.isActive = true;
+      await user.save();
     }
 
-    // Create technician from application
-    const user = await User.create({
-      name: application.name,
-      email: application.email,
-      password: application.password, // Already hashed
-      phone: application.phone,
-      role: "technician",
-      specialization: application.specialization,
-      isActive: true
-    });
-
-    // Update application
+    // ✅ IMPORTANT: Set userId on application
+    application.userId = user._id;
     application.status = "approved";
     application.reviewedBy = req.user.id;
     application.reviewedAt = new Date();
@@ -125,13 +128,15 @@ const approveApplication = async (req, res) => {
       data: {
         application: {
           id: application._id,
-          status: application.status
+          status: application.status,
+          userId: application.userId
         },
-        technician: userResponse
+        user: userResponse
       }
     });
 
   } catch (err) {
+    console.error("Error in approveApplication:", err);
     res.status(500).json({
       success: false,
       message: err.message

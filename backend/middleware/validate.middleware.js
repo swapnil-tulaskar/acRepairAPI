@@ -1,8 +1,7 @@
-const { logger } = require("../utils/logger.js");
+const { ZodError } = require("zod");
 
 const validate = (schema) => {
   console.log("📝 validate middleware factory called");
-  console.log("Schema type:", typeof schema);
   
   return (req, res, next) => {
     console.log("✅ validate middleware executing for:", req.path);
@@ -11,20 +10,31 @@ const validate = (schema) => {
     try {
       const result = schema.parse(req.body);
       req.body = result;
-      logger.debug("VALIDATION PASSED");
       console.log("✅ Validation passed");
       next();
     } catch (err) {
-      logger.error("VALIDATION FAILED");
-      console.log("❌ Validation failed:", err.errors);
+      console.log("❌ Validation failed:", err);
       
+      // Handle Zod errors directly - don't pass to global error handler
+      if (err instanceof ZodError) {
+        const errors = err.errors.map((e) => ({
+          field: e.path.join("."),
+          message: e.message,
+          code: e.code
+        }));
+
+        return res.status(422).json({
+          success: false,
+          message: "Validation error",
+          errors: errors
+        });
+      }
+      
+      // Handle other errors
       return res.status(400).json({
         success: false,
         message: "Validation error",
-        errors: err?.errors?.map(e => ({
-          field: e.path?.join("."),
-          message: e.message
-        })) || [err.message]
+        errors: [{ message: err.message }]
       });
     }
   };
